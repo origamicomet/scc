@@ -1,0 +1,97 @@
+; A basic vertex shader that projects a world space primitive to the screen and
+; colors it by interpolating between two colors by time.
+
+; This is designed to test every major case of the parser.
+
+program vertex
+
+type vertex {
+  f32<3x1> position
+  f32<4x1> color_1
+  f32<4x1> color_2
+}
+
+constants {
+  f32 @time = 0
+}
+
+constants @frame = 0 {
+  f32<4x4> world_to_view = 0
+  f32<4x4> view_to_screen = 64
+  f32<4x4> world_to_screen = 128
+}
+
+inputs {
+  vertex @in = 0
+}
+
+outputs {
+  f32<4x1> @position = position
+  f32<4x1> @color = 1
+}
+
+def f32<4x1> @lerp(f32<4x1> %a, f32<4x1> %b, f32 %t) {
+  %1 = sub %b, %a
+  %2 = mul %t, %1
+  %3 = add %a, %2
+
+  ret %3
+}
+
+; Notice the type inference.
+def void @entry() {
+entry:
+  ; In this case, @in and @frame are actually 'pointers'.
+  %0 = load @in, position
+  %1 = load @frame, world_to_screen
+
+  %2 = mul %1, %0
+
+  store @position, %2 
+
+  %3 = load @in, color_1
+  %4 = load @in, color_2
+  %5 = load @time
+  
+  %6 = call @lerp, %3, %4, %5
+
+  ; Multiple (redundant) swizzles to test constant parsing as well as "swizzle
+  ; squashing."
+  %7 = swizzle %6, 0b0000'0001'0000'0010'0000'0011'0000'0100
+  %8 = swizzle %7, 4321
+
+  store @color, %8
+}
+
+; Two methods of stepping between colors, to test branching as well as dead
+; code elimination.
+
+def f32<4x1> @branching(f32<4x1> %a, f32<4x1> %b, f32 %t) {
+entry:
+  %0 = gte %t, 0.5
+
+  ; Terminators, i.e. branches may only be at the end of a block.
+  branch %0, greater_or_equal
+
+lesser:
+  %1 = %a
+
+greater_or_equal:
+  %2 = %b
+
+exit:
+  ; May only be at the start of a block.
+  %3 = phi %1, %2
+
+  ret %3
+}
+
+def f32<4x1> @branchless(f32<4x1> %a, f32<4x1> %b, f32 %t) {
+  %0 = step %t
+
+  %1 = sub %b, %a
+  %2 = mul %0, %1
+  %3 = add %a, %2
+
+  ret %3
+}

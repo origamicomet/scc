@@ -1,0 +1,122 @@
+# ===-- Rybfile ------------------------------------------*- mode: Ruby -*-=== #
+#
+#                              _____ _____ _____ 
+#                             |   __|     |     |
+#                             |__   |   --|   --|
+#                             |_____|_____|_____|
+#                           
+#                            Shader Cross Compiler
+#
+#        This file is distributed under the terms described in LICENSE.
+#
+# ===----------------------------------------------------------------------=== #
+
+# TODO(mtwilliams): User-specified configuration matrix.
+
+project :scc, pretty: 'SCC' do |proj|
+  # We dynamically link for upgradability.
+  proj.define 'SCC_LINKAGE' => 'SCC_LINKAGE_STATIC'
+
+  # Supress all of Visual Studio's bullshit.
+  # TODO(mtwilliams): Refactor into Ryb.
+  proj.define '_HAS_EXCEPTIONS' => false,
+              '_SCL_SECURE_NO_WARNINGS' => true,
+              '_CRT_SECURE_NO_WARNINGS' => true,
+              '_CRT_SECURE_NO_DEPRECATE' => true,
+              '_SECURE_SCL_THROWS' => false,
+              '_SILENCE_DEPRECATION_OF_SECURE_SCL_THROWS' => true,
+              # See http://stackoverflow.com/questions/14363929
+              '_USING_V110_SDK71_' => true
+
+  # Suffix builds in the form: _{configuration}_{platform}_{32,64}.
+   # e.g. libscc_macosx_64.dylib or scc_windows_32.dll
+  proj.architecture :x86 do |arch| arch.suffix = '_32'; end
+  proj.architecture :x86_64 do |arch| arch.suffix = '_64'; end
+  proj.platform :windows do |platform| platform.suffix = '_windows'; end
+  proj.platform :macosx do |platform| platform.suffix = '_macosx'; end
+  proj.platform :linux do |platform| platform.suffix = '_linux'; end
+  proj.configuration :debug do |config| config.suffix = '_debug'; end
+  proj.configuration :release do |config| config.suffix = '_release'; end
+
+  proj.configuration :debug, pretty: 'Debug' do |config|
+    config.define 'SCC_CONFIGURATION' => 'SCC_CONFIGURATION_DEBUG'
+
+    config.define '_DEBUG' => true,
+                  '_HAS_ITERATOR_DEBUGGING' => true,
+                  '_SECURE_SCL' => true
+
+    config.generate_debug_symbols = true
+    config.link_time_code_generation = false
+    config.optimize = :nothing
+  end
+
+  proj.configuration :release, pretty: 'Release' do |config|
+    config.define 'SCC_CONFIGURATION' => 'SCC_CONFIGURATION_RELEASE'
+
+    config.define 'NDEBUG' => true,
+                  '_HAS_ITERATOR_DEBUGGING' => false,
+                  '_SECURE_SCL' => false
+
+    config.generate_debug_symbols = true
+    config.link_time_code_generation = true
+    config.optimize = :speed
+  end
+
+  proj.library :scc, pretty: 'SCC' do |lib|
+    lib.linkage = :static
+
+    lib.author = 'Michael Williams'
+    lib.description = 'Cross-compiler toolchain for shaders.'
+    lib.license = 'CC0'
+
+    lib.define '__SCC_IS_BEING_COMPILED__' => true
+    lib.define '__SCC_VERSION__' => "\"\\\"#{IO.binread('VERSION').rstrip}\\\"\""
+    lib.define '__SCC_REVISION__' => `git rev-list --count HEAD`.strip.to_i
+
+    lib.add_include_paths 'include/'
+    lib.add_library_paths '$build/lib/', '$build/bin/'
+    lib.add_binary_paths '$build/bin/'
+
+    lib.add_source_files 'include/**/*.{h,hpp}'
+    lib.add_source_files 'src/**/*.{c,cc,cpp}'
+
+    lib.platform :windows do |platform|
+      platform.add_external_dependencies %w(kernel32 user32)
+    end
+  end
+
+  proj.application :standalone, pretty: 'Standalone' do |app|
+    # TODO(mtwilliams): Override image name.
+    # app.image 'scc'
+
+    app.define '__SCC_IS_STANDALONE__' => true
+
+    app.add_include_paths 'include/'
+    app.add_library_paths '$build/lib/', '$build/bin/'
+    app.add_binary_paths '$build/bin/'
+
+    app.add_source_files 'src/scc/driver/standalone.cc'
+
+    app.add_dependency :scc
+
+    app.platform :windows do |platform|
+      platform.add_external_dependencies %w(kernel32 user32)
+    end
+  end
+
+  # TODO(mtwilliams): Automated test suite.
+  #
+  # proj.application :tests, pretty: 'Tests' do |app|
+  #   app.add_include_paths 'include/', 'test/'
+  #   app.add_library_paths '$build/lib/', '$build/bin/'
+  #   app.add_binary_paths '$build/bin/'
+  #
+  #   app.add_source_files 'test/**/*.{h,hpp,c,cc,cpp}'
+  #
+  #   app.add_dependency :scc
+  #
+  #   app.platform :windows do |platform|
+  #     platform.add_external_dependencies %w(kernel32 user32)
+  #   end
+  # end
+end
