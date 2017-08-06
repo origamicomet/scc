@@ -19,12 +19,6 @@
 SCC_BEGIN_EXTERN_C
 
 // REFACTOR(mtwilliams): Move to appropriate header.
-typedef enum scc_bracket {
-  SCC_BRACKET_OPEN  = 1,
-  SCC_BRACKET_CLOSE = 0,
-} scc_bracket_t;
-
-// REFACTOR(mtwilliams): Move to appropriate header.
 typedef enum scc_ir_scope {
   SCC_IR_SCOPE_NONE   = 0,
   SCC_IR_SCOPE_LOCAL  = 1,
@@ -67,9 +61,12 @@ typedef enum scc_ir_token_type {
   SCC_IR_TOKEN_NUMBER,
 
   // Punctuation.
-  SCC_IR_TOKEN_PARENTHESIS,
-  SCC_IR_TOKEN_BRACE,
-  SCC_IR_TOKEN_BRACKET,
+  SCC_IR_TOKEN_L_PARENTHESIS,
+  SCC_IR_TOKEN_R_PARENTHESIS,
+  SCC_IR_TOKEN_L_BRACE,
+  SCC_IR_TOKEN_R_BRACE,
+  SCC_IR_TOKEN_L_BRACKET,
+  SCC_IR_TOKEN_R_BRACKET,
   SCC_IR_TOKEN_COMMA,
   SCC_IR_TOKEN_EQUALS
 } scc_ir_token_type_t;
@@ -213,8 +210,6 @@ typedef struct scc_ir_token {
   scc_size_t length;
 
   union {
-    scc_bracket_t bracket;
-
     // First class type.
     const scc_ir_type_def_t *type_def;
 
@@ -310,18 +305,16 @@ static const scc_ir_token_t *scc_ir_lexer_handle_comment(scc_ir_lexer_t *lexer) 
 
 static const scc_ir_token_t *scc_ir_lexer_handle_bracket(scc_ir_lexer_t *lexer) {
   switch (lexer->scanner.character) {
-    case '(': case ')': lexer->token.type = SCC_IR_TOKEN_PARENTHESIS; break;
-    case '{': case '}': lexer->token.type = SCC_IR_TOKEN_BRACE; break;
-    case '[': case ']': lexer->token.type = SCC_IR_TOKEN_BRACKET; break;
+    case '(': lexer->token.type = SCC_IR_TOKEN_L_PARENTHESIS; break;
+    case ')': lexer->token.type = SCC_IR_TOKEN_R_PARENTHESIS; break;
+    case '{': lexer->token.type = SCC_IR_TOKEN_L_BRACE; break;
+    case '}': lexer->token.type = SCC_IR_TOKEN_R_BRACE; break;
+    case '[': lexer->token.type = SCC_IR_TOKEN_L_BRACKET; break;
+    case ']': lexer->token.type = SCC_IR_TOKEN_R_BRACKET; break;
   }
   
   lexer->token.position = lexer->scanner.position;
   lexer->token.length = 1;
-
-  switch (lexer->scanner.character) {
-    case '(': case '{': case '[': lexer->token.bracket = SCC_BRACKET_OPEN; break;
-    case ')': case '}': case ']': lexer->token.bracket = SCC_BRACKET_CLOSE; break;
-  }
 
   return &lexer->token;
 }
@@ -878,23 +871,26 @@ scc_bool_t scc_ir_parser_parse(scc_ir_parser_t *parser) {
 
         break;
 
-      case SCC_IR_TOKEN_PARENTHESIS:
+      case SCC_IR_TOKEN_L_PARENTHESIS:
+      case SCC_IR_TOKEN_R_PARENTHESIS:
         printf("PARENTHESIS @ %u:%u (%s)\n",
                token->position.line,
                token->position.character,
-               (token->bracket == SCC_BRACKET_OPEN) ? "OPEN" : "CLOSE");
+               (token->type == SCC_IR_TOKEN_L_PARENTHESIS) ? "OPEN" : "CLOSE");
         break;
-      case SCC_IR_TOKEN_BRACE:
+      case SCC_IR_TOKEN_L_BRACE:
+      case SCC_IR_TOKEN_R_BRACE:
         printf("BRACE @ %u:%u (%s)\n",
                token->position.line,
                token->position.character,
-               (token->bracket == SCC_BRACKET_OPEN) ? "OPEN" : "CLOSE");
+               (token->type == SCC_IR_TOKEN_L_BRACE) ? "OPEN" : "CLOSE");
         break;
-      case SCC_IR_TOKEN_BRACKET:
+      case SCC_IR_TOKEN_L_BRACKET:
+      case SCC_IR_TOKEN_R_BRACKET:
         printf("BRACKET @ %u:%u (%s)\n",
                token->position.line,
                token->position.character,
-               (token->bracket == SCC_BRACKET_OPEN) ? "OPEN" : "CLOSE");
+               (token->type == SCC_IR_TOKEN_L_BRACKET) ? "OPEN" : "CLOSE");
         break;
 
       case SCC_IR_TOKEN_COMMA:
