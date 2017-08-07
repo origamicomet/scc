@@ -265,7 +265,7 @@ void scc_lexer_get_up_to_delimiter(scc_lexer_t *lexer,
 
   buffer[offset++] = lexer->character;
 
-  while (const scc_character_t character = scc_lexer_get_next_character(lexer)) {
+  while (const scc_character_t character = scc_lexer_peek_next_character(lexer)) {
     if (scc_is_whitespace(character))
       break;
 
@@ -274,6 +274,8 @@ void scc_lexer_get_up_to_delimiter(scc_lexer_t *lexer,
 
     // TODO(mtwilliams): Ensure we never exceed |limit|.
     buffer[offset++] = character;
+
+    scc_lexer_swallow_next_character(lexer);
   }
 
   // Null terminate.

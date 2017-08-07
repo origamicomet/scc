@@ -545,7 +545,7 @@ static const scc_ir_token_t *scc_ir_lexer_try_match_number(scc_ir_lexer_t *lexer
   char buffer[256];
   scc_size_t length = 0;
 
-  for (const scc_character_t *ch = &lexeme[offset]; *ch; ++length, ++ch) {
+  for (const scc_character_t *ch = &lexeme[offset]; *ch; ++ch) {
     if (*ch == '\'')
       // Delimiter to improve readability.
       continue;
