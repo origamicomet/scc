@@ -16,6 +16,9 @@
 // Common scanning logic is factored out.
 #include "scc/lexer.h"
 
+// REFACTOR(mtwilliams): Move into header.
+#include <stdarg.h>
+
 SCC_BEGIN_EXTERN_C
 
 // REFACTOR(mtwilliams): Move to appropriate header.
@@ -260,13 +263,15 @@ static const scc_size_t NUM_OF_DELIMITERS =
 static scc_ir_lexer_t *scc_ir_lexer_initialize(scc_ir_lexer_t *lexer,
                                                const scc_ir_lexer_options *options,
                                                scc_feed_t *feed) {
+  scc_allocator_t *heap = scc_get_global_heap_allocator();
+  
   scc_assert_paranoid(options != NULL);
   scc_assert_paranoid(feed != NULL);
   
   if (lexer) {
     lexer->free_after_finalize = SCC_FALSE;
   } else {
-    lexer = (scc_ir_lexer_t *)calloc(1, sizeof(scc_ir_lexer_t));
+    lexer = (scc_ir_lexer_t *)heap->allocate(heap, sizeof(scc_ir_lexer_t), 16);
     lexer->free_after_finalize = SCC_TRUE;
   }
 
@@ -286,10 +291,12 @@ static scc_ir_lexer_t *scc_ir_lexer_initialize(scc_ir_lexer_t *lexer,
 }
 
 static void scc_ir_lexer_finalize(scc_ir_lexer_t *lexer) {
+  scc_allocator_t *heap = scc_get_global_heap_allocator();
+  
   scc_lexer_finalize(&lexer->scanner);
 
   if (lexer->free_after_finalize)
-    free((void *)lexer);
+    heap->free(heap, (void *)lexer);
 }
 
 static const scc_ir_token_t *scc_ir_lexer_handle_comment(scc_ir_lexer_t *lexer) {
@@ -760,21 +767,61 @@ static const scc_ir_token_t *scc_ir_lexer_get_next_token(scc_ir_lexer_t *lexer) 
   }
 }
 
+// REFACTOR(mtwilliams): Into reusable feedback system.
+typedef enum scc_ir_parser_message_severity {
+  SCC_IR_PARSER_WARNING  = 1,
+  SCC_IR_PARSER_ERROR    = 2,
+  SCC_IR_PARSER_INTERNAL = 3
+} scc_ir_parser_message_severity_t;
+
+typedef struct scc_ir_parser_message {
+  struct scc_ir_parser_message *next;
+
+  scc_ir_parser_message_severity_t severity;
+
+  // TODO(mtwilliams): Rename something clearer.
+  scc_span_t context;
+
+  // TODO(mtwilliams): Dynamically allocate through a common buddy allocator.
+  char message[4096];
+} scc_ir_parser_message_t;
+
 typedef struct scc_ir_parser {
   scc_ir_lexer_t lexer;
 
-  // TODO(mtwilliams): Buffer tokens?
-  const scc_ir_token_t *token;
+  // Internal buffer.
+  scc_ir_token_t *buffer;
 
+  // Size of buffer in tokens.
+  scc_size_t size_of_buffer;
+
+  scc_size_t position_in_buffer;
+  scc_size_t end_of_buffer;
+
+  // Current token.
+  scc_ir_token_t token;
+
+  // Indicates if lexer is at the end of the feed.
+  scc_bool_t eof;
+
+  // Indicates if program type has been specified.
+  scc_bool_t type_has_been_specified;
+
+  scc_ir_parser_message_t *messages;
+
+  // Indicates if parsing failed.
   scc_bool_t failed;
 } scc_ir_parser_t;
 
+// TODO(mtwilliams): Expose buffer sizes.
 static scc_ir_parser_t *scc_ir_parser_create(scc_feed_t *feed,
                                              const scc_ir_parse_options_t *options) {
+  scc_allocator_t *heap = scc_get_global_heap_allocator();
+
   scc_assert_paranoid(feed != NULL);
 
   scc_ir_parser_t *parser =
-    (scc_ir_parser_t *)calloc(1, sizeof(scc_ir_parser_t));
+    (scc_ir_parser_t *)heap->allocate(heap, sizeof(scc_ir_parser_t), 16);
 
   scc_ir_lexer_options_t lexer_options;
   lexer_options.buffer = 8192;
@@ -782,156 +829,255 @@ static scc_ir_parser_t *scc_ir_parser_create(scc_feed_t *feed,
   scc_ir_lexer_initialize(&parser->lexer,
                           &lexer_options,
                           feed);
+  
+  parser->buffer =
+    (scc_ir_token_t *)heap->allocate(heap, 256 * sizeof(scc_ir_token_t), 16);
+
+  parser->size_of_buffer     = 256;
+  parser->position_in_buffer = 0;
+  parser->end_of_buffer      = 0;
+
+  parser->token.type = SCC_IR_TOKEN_UNKNOWN;
+
+  parser->eof = SCC_FALSE;
+
+  parser->type_has_been_specified = SCC_FALSE;
+
+  parser->messages = NULL;
+
+  parser->failed = SCC_FALSE;
 
   return parser;
 }
 
 static void scc_ir_parser_destroy(scc_ir_parser_t *parser) {
-  scc_assert_paranoid(parser != NULL);
+  scc_allocator_t *heap = scc_get_global_heap_allocator();
 
   scc_ir_lexer_finalize(&parser->lexer);
 
-  free((void *)parser);
+  heap->free(heap, (void *)parser->buffer);
+
+  scc_ir_parser_message_t *message = parser->messages;
+  while (message) {
+    scc_ir_parser_message_t *next = message->next;
+    heap->free(heap, (void *)message);
+    message = next;
+  }
+
+  heap->free(heap, (void *)parser);
+}
+
+static scc_bool_t scc_ir_parser_get_next_chunk(scc_ir_parser_t *parser) {
+  // Make sure we've exhausted our internal buffer.
+  scc_assert_paranoid(parser->position_in_buffer == parser->end_of_buffer);
+
+  if (!parser->eof) {
+    parser->position_in_buffer = 0;
+    parser->end_of_buffer      = 0;
+
+    while (parser->end_of_buffer <= parser->size_of_buffer) {
+      const scc_ir_token_t *token = scc_ir_lexer_get_next_token(&parser->lexer);
+    
+      parser->buffer[parser->end_of_buffer++] = *token;
+
+      if (token->type == SCC_IR_TOKEN_EOF)
+        break;
+    }
+  }
+
+  return !(parser->eof);
 }
 
 static const scc_ir_token_t *scc_ir_parser_get_next_token(scc_ir_parser *parser) {
-  if (parser->lexer.scanner.eof)
+  if (parser->eof) {
+    // Sanity check to make sure lexer reports end-of-feed correctly.
+    scc_assert_paranoid(parser->lexer.scanner.eof);
     return NULL;
+  }
 
-  parser->token = scc_ir_lexer_get_next_token(&parser->lexer);
+  if (parser->position_in_buffer == parser->end_of_buffer) {
+    scc_ir_parser_get_next_chunk(parser);
+    return scc_ir_parser_get_next_token(parser);
+  }
 
-  return parser->token;
+  parser->token = parser->buffer[parser->position_in_buffer++];
+
+  if (parser->token.type == SCC_IR_TOKEN_EOF)
+    parser->eof = SCC_TRUE;
+
+  return &parser->token;
+}
+
+static const scc_ir_token_t *scc_ir_parser_peek_next_token(scc_ir_parser_t *parser) {
+  if (parser->eof) {
+    // Sanity check to make sure lexer reports end-of-feed correctly.
+    scc_assert_paranoid(parser->lexer.scanner.eof);
+    return NULL;
+  }
+
+  if (parser->position_in_buffer == parser->end_of_buffer) {
+    scc_ir_parser_get_next_chunk(parser);
+    return scc_ir_parser_peek_next_token(parser);
+  }
+
+  return &parser->buffer[parser->position_in_buffer];
+}
+
+static void scc_ir_parser_swallow_next_token(scc_ir_parser_t *parser) {
+  scc_ir_parser_get_next_token(parser);
+}
+
+// Returns true if next token is of a certain type.
+static scc_bool_t scc_ir_parser_is_next_token(scc_ir_parser_t *parser,
+                                              scc_ir_token_type_t type) {
+  const scc_ir_token_t *next = scc_ir_parser_peek_next_token(parser);
+  return (next->type == type);
+}
+
+// Returns true if next token is on a different line.
+static scc_bool_t scc_ir_parser_is_next_line(scc_ir_parser_t *parser) {
+  const scc_ir_token_t *next = scc_ir_parser_peek_next_token(parser);
+  return (next->position.line > parser->token.position.line);
+}
+
+static void scc_ir_parser_message(scc_ir_parser_t *parser,
+                                  scc_ir_parser_message_severity_t severity,
+                                  const char *format,
+                                  va_list args) {
+  scc_allocator_t *heap = scc_get_global_heap_allocator();
+
+  scc_ir_parser_message_t *message =
+    (scc_ir_parser_message_t *)
+      heap->allocate(heap, sizeof(scc_ir_parser_message_t), 16);
+
+  message->severity = severity;
+
+  // TODO(mtwilliams): Improve contextualization.
+  message->context.start = parser->token.position;
+  message->context.end   = parser->token.position;
+
+  static const scc_size_t limit = sizeof(message->message) - 1;
+
+  vsnprintf(&message->message[0], limit, format, args);
+
+  // Ensure null terminated.
+  message->message[limit] = '\0';
+
+  // PERF(mtwilliams): Appends in `O(n)` time.
+  scc_ir_parser_message_t **prev = &parser->messages;
+  while (*prev)
+    prev = &(*prev)->next;
+  *prev = message;
+}
+
+static void scc_ir_parser_error(scc_ir_parser_t *parser,
+                                const char *format,
+                                ...) {
+  parser->failed = SCC_TRUE;
+
+  va_list va;
+  va_start(va, format);
+  scc_ir_parser_message(parser, SCC_IR_PARSER_ERROR, format, va);
+  va_end(va);
+}
+
+static scc_bool_t scc_ir_parser_handle_program(scc_ir_parser_t *parser) {
+  const scc_ir_token_t *type_token = scc_ir_parser_peek_next_token(parser);
+
+  if (type_token->type != SCC_IR_TOKEN_IDENTIFIER) {
+    scc_ir_parser_error(parser,
+                        "Expected program type to be `vertex`, `pixel`, or `compute`.");
+    return SCC_FALSE;
+  }
+
+  scc_ir_parser_swallow_next_token(parser);
+
+  scc_program_type_t type;
+
+  if (strcmp(type_token->identifier, "vertex") == 0) {
+    type = SCC_VERTEX_SHADER;
+  } else if (strcmp(type_token->identifier, "pixel") == 0) {
+    type = SCC_PIXEL_SHADER;
+  } else if (strcmp(type_token->identifier, "compute") == 0) {
+    type = SCC_COMPUTE_SHADER;
+  } else {
+    scc_ir_parser_error(parser,
+                        "Program type can only be `vertex`, `pixel`, or `compute`. Was given `%s`.",
+                        type_token->identifier);
+    return SCC_FALSE;
+  }
+
+  if (!scc_ir_parser_is_next_line(parser)) {
+    if (!scc_ir_parser_is_next_token(parser, SCC_IR_TOKEN_COMMENT)) {
+      scc_ir_parser_error(parser,
+                          "Program type must be specified on its own line.");
+      return SCC_FALSE;
+    }
+  } 
+
+  if (parser->type_has_been_specified) {
+    scc_ir_parser_error(parser,
+                        "Cannot redefine program type!");
+    return SCC_FALSE;
+  }
+
+  parser->type_has_been_specified = SCC_TRUE;
+
+  return SCC_TRUE;
 }
 
 scc_bool_t scc_ir_parser_parse(scc_ir_parser_t *parser) {
-  // HACK(mtwilliams): Temporary inspection. Remove later.
   while (const scc_ir_token_t *token = scc_ir_parser_get_next_token(parser)) {
     switch (token->type) {
       case SCC_IR_TOKEN_COMMENT:
-        printf("COMMENT @ %u:%u (%u)\n",
-               token->position.line,
-               token->position.character,
-               token->length);
+        // Comments are of no consequence.
         break;
 
       case SCC_IR_TOKEN_PROGRAM:
-      case SCC_IR_TOKEN_TYPEDEF:
-      case SCC_IR_TOKEN_INPUTS:
-      case SCC_IR_TOKEN_OUTPUTS:
-      case SCC_IR_TOKEN_CONSTANTS:
-      case SCC_IR_TOKEN_DEFINE:
-      case SCC_IR_TOKEN_CALL:
-      case SCC_IR_TOKEN_RETURN:
-        printf("KEYWORD @ %u:%u\n",
-               token->position.line,
-               token->position.character);
-        break;
-
-      case SCC_IR_TOKEN_TYPE:
-        printf("TYPE @ %u:%u (%s)\n",
-               token->position.line,
-               token->position.character,
-               token->type_def->name);
-        break;
-
-      case SCC_IR_TOKEN_OPERATION:
-        printf("OPERATION @ %u:%u %s (%u)\n",
-               token->position.line,
-               token->position.character,
-               OPERATIONS[token->op].mnemonic,
-               token->op);
-        break;
-
-      case SCC_IR_TOKEN_IDENTIFIER:
-        printf("IDENTIFIER @ %u:%u (%s)\n",
-               token->position.line,
-               token->position.character,
-               &token->identifier[0]);
-        break;
-
-      case SCC_IR_TOKEN_LABEL:
-        printf("LABEL @ %u:%u (%s)\n",
-               token->position.line,
-               token->position.character,
-               &token->label[0]);
-        break;
-
-      case SCC_IR_TOKEN_NUMBER:
-        if (token->constant.is_integer) {
-          printf("NUMBER @ %u:%u (%lld)\n",
-                 token->position.line,
-                 token->position.character,
-                 token->constant.integer);
-        } else if (token->constant.is_floating_point) {
-          printf("NUMBER @ %u:%u (%f)\n",
-                 token->position.line,
-                 token->position.character,
-                 token->constant.floating_point);
-        }
-
-        break;
-
-      case SCC_IR_TOKEN_L_PARENTHESIS:
-      case SCC_IR_TOKEN_R_PARENTHESIS:
-        printf("PARENTHESIS @ %u:%u (%s)\n",
-               token->position.line,
-               token->position.character,
-               (token->type == SCC_IR_TOKEN_L_PARENTHESIS) ? "OPEN" : "CLOSE");
-        break;
-      case SCC_IR_TOKEN_L_BRACE:
-      case SCC_IR_TOKEN_R_BRACE:
-        printf("BRACE @ %u:%u (%s)\n",
-               token->position.line,
-               token->position.character,
-               (token->type == SCC_IR_TOKEN_L_BRACE) ? "OPEN" : "CLOSE");
-        break;
-      case SCC_IR_TOKEN_L_BRACKET:
-      case SCC_IR_TOKEN_R_BRACKET:
-        printf("BRACKET @ %u:%u (%s)\n",
-               token->position.line,
-               token->position.character,
-               (token->type == SCC_IR_TOKEN_L_BRACKET) ? "OPEN" : "CLOSE");
-        break;
-
-      case SCC_IR_TOKEN_COMMA:
-        printf("COMMA @ %u:%u\n",
-               token->position.line,
-               token->position.character);
-        break;
-      case SCC_IR_TOKEN_EQUALS:
-        printf("EQUALS @ %u:%u\n",
-               token->position.line,
-               token->position.character);
-        break;
-
-      case SCC_IR_TOKEN_UNKNOWN:
-        printf("UNKNOWN @ %u:%u (%u)\n",
-               token->position.line,
-               token->position.character,
-               token->length);
+        scc_ir_parser_handle_program(parser);
         break;
 
       default:
+        scc_ir_parser_error(parser, "Unexpected token.");
         break;
     }
   }
 
   if (parser->lexer.scanner.errors) {
     parser->failed = SCC_TRUE;
-  } else {
-    // TODO(mtwilliams): Parse tokens.
+    return SCC_FALSE;
   }
-
+  
   return !(parser->failed);
 }
 
+// TODO(mtwilliams): Better error reporting.
 void scc_ir_parser_report_all_errors(const scc_ir_parser_t *parser) {
-  const scc_lexer_error_t *error = parser->lexer.scanner.errors;
+  {
+    const scc_lexer_error_t *error = parser->lexer.scanner.errors;
 
-  // TODO(mtwilliams): Better error reporting.
-  while (error) {
-    fprintf(stderr, "Error: %s\n", error->message);
-    error = error->next;
+    while (error) {
+      fprintf(stderr, "SYNTAX ERROR: %s\n", error->message);
+      error = error->next;
+    }
+  }
+
+  {
+    const scc_ir_parser_message_t *message = parser->messages;
+
+    while (message) {
+      const char *severity;
+
+      switch (message->severity) {
+        case SCC_IR_PARSER_WARNING: severity = "WARNING"; break;
+        case SCC_IR_PARSER_ERROR: severity = "ERROR"; break;
+        case SCC_IR_PARSER_INTERNAL: severity = "INTERNAL ERROR"; break;
+      }
+
+      fprintf(stderr, "%s: %s\n", severity, message->message);
+
+      message = message->next;
+    }    
   }
 }
 
