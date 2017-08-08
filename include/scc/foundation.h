@@ -31,6 +31,9 @@
 
 #include "scc/foundation/assert.h"
 
+#include "scc/foundation/allocator.h"
+#include "scc/foundation/global_heap_allocator.h"
+
 #include "scc/foundation/ascii.h"
 #include "scc/foundation/unicode.h"
 
