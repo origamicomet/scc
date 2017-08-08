@@ -25,9 +25,9 @@
 #include "scc/linkage.h"
 
 #include "scc/foundation/types.h"
-
 #include "scc/foundation/support.h"
 #include "scc/foundation/utilities.h"
+#include "scc/foundation/atomics.h"
 
 #include "scc/foundation/assert.h"
 
