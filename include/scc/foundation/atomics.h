@@ -15,8 +15,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef _SCC_FOUNDATION_UTILITIES_H_
-#define _SCC_FOUNDATION_UTILITIES_H_
+#ifndef _SCC_FOUNDATION_ATOMICS_H_
+#define _SCC_FOUNDATION_ATOMICS_H_
 
 #include "scc/foundation/types.h"
 #include "scc/foundation/support.h"
@@ -326,4 +326,4 @@ SCC_INLINE void *scc_atomic_cmp_and_xchg_ptr(void ** volatile v, const void *exp
 
 SCC_END_EXTERN_C
 
-#endif // _SCC_FOUNDATION_UTILITIES_H_
+#endif // _SCC_FOUNDATION_ATOMICS_H_
