@@ -1,5 +1,7 @@
 ### Immediate
 
+* Refactor `scc_ir_parser` messages into generic mixin.
+
 1. Document `scc/lexer.h` and `scc/feed.h`.
 2. Finish intermediate representation lexer.
 3. Parse intermediate representation.
@@ -32,7 +34,12 @@ TODO:
     * Instruction selection pass.
   * Analysis
     * Poisoning.
-      * Yell at user for undefined behavior. 
+      * Yell at user for undefined behavior.
+  * Big ol' list to make classification of errors easier.
+    * Use a substitution macro!
+  * Smart console.
+    * Look to Ninja for technical specifics.
+    * Look to pull requests against Ninja for UI/UX ideas.
 
 PERF:
   * File/feed caching to improve pre-processor `#include` performance.

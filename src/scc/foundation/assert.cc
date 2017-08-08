@@ -35,4 +35,3 @@ void scc_set_assertion_handler(
 }
 
 SCC_END_EXTERN_C
-
